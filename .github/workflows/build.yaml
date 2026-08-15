@@ -78,3 +78,8 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/pnl-ce:latest
+      
+      - name: Trigger Jenkins Deployment
+        run: |
+          curl -X POST "${{ secrets.JENKINS_URL }}/job/deploy-pnl-ce/build?token=${{ secrets.JENKINS_BUILD_TOKEN }}" \
+              --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}"
