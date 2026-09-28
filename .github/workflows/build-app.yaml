@@ -1,0 +1,106 @@
+name: Build Web App
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        required: false
+        description: "Tag or version to build (leave empty for main branch)"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/vanminhso-app-ce
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout CE Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout App Repository
+        uses: actions/checkout@v4
+        with:
+          repository: "vmsvn/vanminhso-app"
+          token: ${{ secrets.DEPLOYMENT_PAT }}
+          ref: main
+          path: app
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Checkout Tag (if version is not empty)
+        if: ${{ inputs.version != '' }}
+        working-directory: ./app
+        run: |
+          git checkout ${{ inputs.version }}
+
+      - name: Ensure Main (if version is empty)
+        if: ${{ inputs.version == '' }}
+        run: |
+          echo "Version is empty, staying on main branch"
+
+      - name: Resolve Image Tag
+        id: meta
+        working-directory: ./app
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG="main-$(git rev-parse --short HEAD)"
+          fi
+          # Docker tags only allow [A-Za-z0-9_.-]
+          TAG=$(echo "$TAG" | sed 's/[^A-Za-z0-9_.-]/-/g')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "flutter=$(jq -r '.flutter' .fvmrc)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.meta.outputs.flutter }}
+          channel: stable
+          cache: true
+
+      - name: Write Production Env
+        working-directory: ./app
+        env:
+          APP_ENV_PROD_JSON: ${{ secrets.APP_ENV_PROD_JSON }}
+        run: |
+          if [ -n "$APP_ENV_PROD_JSON" ]; then
+            echo "$APP_ENV_PROD_JSON" > .env.prod.json
+            echo "Using .env.prod.json from APP_ENV_PROD_JSON secret"
+          else
+            cp .env.example.json .env.prod.json
+            echo "APP_ENV_PROD_JSON secret not set, falling back to .env.example.json"
+          fi
+
+      - name: Build Web App
+        working-directory: ./app
+        run: |
+          set -e
+          flutter pub get
+          flutter build web --release --dart-define-from-file=.env.prod.json
+          cp -r build/web ../docker/app/web
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker/app
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:latest
