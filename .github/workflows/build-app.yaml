@@ -77,6 +77,8 @@ jobs:
             cp .env.example.json .env.prod.json
             echo "APP_ENV_PROD_JSON secret not set, falling back to .env.example.json"
           fi
+          jq -e . .env.prod.json > /dev/null || { echo "::error::.env.prod.json is not valid JSON"; exit 1; }
+          echo "Building with API_URL=$(jq -r '.API_URL // "<not set, using code default>"' .env.prod.json)"
 
       - name: Build Web App
         working-directory: ./app
